@@ -1,0 +1,35 @@
+# Render.com Blueprint for SpiderFoot OSINT Platform
+# Deploy: https://render.com/deploy?repo=https://github.com/breverdbidder/spiderfoot-ci
+
+services:
+  - type: web
+    name: spiderfoot-ci
+    runtime: docker
+    repo: https://github.com/breverdbidder/spiderfoot-ci
+    region: oregon
+    plan: free
+    branch: main
+    healthCheckPath: /
+    envVars:
+      # SpiderFoot Authentication (set in Render dashboard)
+      - key: SF_USERNAME
+        sync: false
+      - key: SF_PASSWORD
+        sync: false
+      # Free tier API keys (set in Render dashboard)
+      - key: SHODAN_API_KEY
+        sync: false
+      - key: CENSYS_API_ID
+        sync: false
+      - key: CENSYS_API_SECRET
+        sync: false
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
+      - key: HUNTER_API_KEY
+        sync: false
+      - key: SECURITYTRAILS_API_KEY
+        sync: false
+    disk:
+      name: spiderfoot-data
+      mountPath: /data/spiderfoot
+      sizeGB: 1
