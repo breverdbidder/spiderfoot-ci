@@ -1,0 +1,147 @@
+# One-time setup workflow to create Supabase tables
+# Trigger manually once after adding secrets
+
+name: Setup Supabase Schema
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "yes" to confirm schema creation'
+        required: true
+        default: 'no'
+
+jobs:
+  create-schema:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'yes'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install psycopg2
+        run: pip install psycopg2-binary
+
+      - name: Create Supabase Tables
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          python3 << 'EOF'
+          import psycopg2
+          import os
+
+          DB_PASSWORD = os.environ['SUPABASE_DB_PASSWORD']
+          PROJECT_REF = "mocerqjnksmhcjzxrewo"
+
+          SQL = """
+          -- Competitor Intelligence Table
+          CREATE TABLE IF NOT EXISTS competitor_intelligence (
+              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              competitor_name TEXT NOT NULL,
+              domain TEXT NOT NULL,
+              category TEXT NOT NULL,
+              scan_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              scan_type TEXT NOT NULL DEFAULT 'passive',
+              technologies JSONB DEFAULT '[]'::jsonb,
+              subdomains JSONB DEFAULT '[]'::jsonb,
+              emails JSONB DEFAULT '[]'::jsonb,
+              ip_addresses JSONB DEFAULT '[]'::jsonb,
+              open_ports JSONB DEFAULT '[]'::jsonb,
+              ssl_info JSONB DEFAULT '{}'::jsonb,
+              social_profiles JSONB DEFAULT '[]'::jsonb,
+              vulnerabilities JSONB DEFAULT '[]'::jsonb,
+              api_endpoints JSONB DEFAULT '[]'::jsonb,
+              raw_count INTEGER DEFAULT 0,
+              created_at TIMESTAMPTZ DEFAULT NOW()
+          );
+
+          -- Indexes
+          CREATE INDEX IF NOT EXISTS idx_ci_competitor ON competitor_intelligence(competitor_name);
+          CREATE INDEX IF NOT EXISTS idx_ci_domain ON competitor_intelligence(domain);
+          CREATE INDEX IF NOT EXISTS idx_ci_scan_date ON competitor_intelligence(scan_date DESC);
+          CREATE INDEX IF NOT EXISTS idx_ci_category ON competitor_intelligence(category);
+          CREATE INDEX IF NOT EXISTS idx_ci_technologies ON competitor_intelligence USING GIN (technologies);
+          CREATE INDEX IF NOT EXISTS idx_ci_subdomains ON competitor_intelligence USING GIN (subdomains);
+
+          -- View for latest scan per competitor
+          CREATE OR REPLACE VIEW latest_competitor_intel AS
+          SELECT DISTINCT ON (competitor_name) *
+          FROM competitor_intelligence
+          ORDER BY competitor_name, scan_date DESC;
+
+          -- View for technology trends
+          CREATE OR REPLACE VIEW competitor_tech_trends AS
+          SELECT 
+              competitor_name,
+              domain,
+              scan_date,
+              jsonb_array_length(technologies) as tech_count,
+              jsonb_array_length(subdomains) as subdomain_count,
+              jsonb_array_length(api_endpoints) as endpoint_count
+          FROM competitor_intelligence
+          ORDER BY scan_date DESC;
+          """
+
+          configs = [
+              {
+                  "name": "Pooler",
+                  "host": f"aws-0-us-east-1.pooler.supabase.com",
+                  "port": 6543,
+                  "user": f"postgres.{PROJECT_REF}",
+              },
+              {
+                  "name": "Direct",
+                  "host": f"db.{PROJECT_REF}.supabase.co",
+                  "port": 5432,
+                  "user": "postgres",
+              }
+          ]
+
+          for config in configs:
+              try:
+                  print(f"Trying {config['name']}...")
+                  conn = psycopg2.connect(
+                      host=config['host'],
+                      port=config['port'],
+                      user=config['user'],
+                      password=DB_PASSWORD,
+                      database="postgres",
+                      sslmode='require',
+                      connect_timeout=30
+                  )
+                  
+                  cur = conn.cursor()
+                  cur.execute(SQL)
+                  conn.commit()
+                  
+                  cur.execute("SELECT COUNT(*) FROM competitor_intelligence;")
+                  count = cur.fetchone()[0]
+                  
+                  print(f"✅ Schema created! Table has {count} rows.")
+                  cur.close()
+                  conn.close()
+                  exit(0)
+                  
+              except Exception as e:
+                  print(f"❌ {config['name']} failed: {e}")
+                  continue
+
+          print("❌ All connections failed")
+          exit(1)
+          EOF
+
+      - name: Verify Tables
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          curl -s "$SUPABASE_URL/rest/v1/competitor_intelligence?limit=1" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" && \
+          echo "✅ Table accessible via REST API"
