@@ -1,0 +1,274 @@
+# SpiderFoot Automated Competitor Intelligence Scanner
+# Runs weekly to gather OSINT on competitors
+# Results stored in Supabase for analysis
+
+name: Competitor Intelligence Scan
+
+on:
+  schedule:
+    # Run every Sunday at 11 PM EST (4 AM UTC Monday)
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target domain to scan (optional - defaults to competitor list)'
+        required: false
+        type: string
+      scan_type:
+        description: 'Scan type'
+        required: false
+        default: 'passive'
+        type: choice
+        options:
+          - passive
+          - active
+          - full
+
+env:
+  SPIDERFOOT_VERSION: "4.0"
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+jobs:
+  scan-competitors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        competitor:
+          - domain: greenlite.ai
+            name: GreenLite
+            category: permit-management
+          - domain: propertyonion.com
+            name: PropertyOnion
+            category: foreclosure
+          - domain: usforeclosure.com  
+            name: USForeclosure
+            category: foreclosure
+          - domain: auction.com
+            name: Auction.com
+            category: foreclosure
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install SpiderFoot
+        run: |
+          git clone --depth 1 https://github.com/smicallef/spiderfoot.git /tmp/spiderfoot
+          cd /tmp/spiderfoot
+          pip install -r requirements.txt
+
+      - name: Configure API Keys
+        run: |
+          mkdir -p ~/.spiderfoot
+          cat > ~/.spiderfoot/SpiderFoot.cfg << EOF
+          [sfp_shodan]
+          api_key = ${{ secrets.SHODAN_API_KEY }}
+          
+          [sfp_censys]
+          api_id = ${{ secrets.CENSYS_API_ID }}
+          api_secret = ${{ secrets.CENSYS_API_SECRET }}
+          
+          [sfp_virustotal]
+          api_key = ${{ secrets.VIRUSTOTAL_API_KEY }}
+          
+          [sfp_hunter]
+          api_key = ${{ secrets.HUNTER_API_KEY }}
+          
+          [sfp_securitytrails]
+          api_key = ${{ secrets.SECURITYTRAILS_API_KEY }}
+          EOF
+
+      - name: Run SpiderFoot Scan - ${{ matrix.competitor.name }}
+        id: scan
+        run: |
+          cd /tmp/spiderfoot
+          SCAN_ID=$(date +%Y%m%d%H%M%S)_${{ matrix.competitor.name }}
+          
+          # Select modules based on scan type
+          if [ "${{ inputs.scan_type || 'passive' }}" == "passive" ]; then
+            MODULES="sfp_dnsresolve,sfp_whois,sfp_ssl_analyze,sfp_spider,sfp_web_analyze"
+            MODULES+=",sfp_shodan,sfp_censys,sfp_virustotal,sfp_securitytrails"
+            MODULES+=",sfp_hunter,sfp_social,sfp_builtwith,sfp_wappalyzer"
+          elif [ "${{ inputs.scan_type || 'passive' }}" == "active" ]; then
+            MODULES="sfp_dnsbrute,sfp_port_scan_basic,sfp_spider"
+            MODULES+=",sfp_web_crawl,sfp_ssl_analyze,sfp_banner_grab"
+          else
+            MODULES="ALL"
+          fi
+          
+          # Run the scan
+          python3 sfcli.py -s "${{ matrix.competitor.domain }}" \
+            -t DOMAIN \
+            -m "$MODULES" \
+            -o json \
+            -q \
+            > /tmp/scan_results_${{ matrix.competitor.name }}.json 2>&1 || true
+          
+          echo "scan_id=$SCAN_ID" >> $GITHUB_OUTPUT
+          echo "Scan completed for ${{ matrix.competitor.domain }}"
+
+      - name: Process Results
+        id: process
+        run: |
+          cd /tmp
+          
+          # Create processed results JSON
+          python3 << 'EOF'
+          import json
+          import os
+          from datetime import datetime
+          
+          competitor = "${{ matrix.competitor.name }}"
+          domain = "${{ matrix.competitor.domain }}"
+          category = "${{ matrix.competitor.category }}"
+          
+          try:
+              with open(f'scan_results_{competitor}.json', 'r') as f:
+                  raw_results = json.load(f)
+          except:
+              raw_results = []
+          
+          # Extract key intelligence
+          intel = {
+              "competitor_name": competitor,
+              "domain": domain,
+              "category": category,
+              "scan_date": datetime.utcnow().isoformat(),
+              "scan_type": "${{ inputs.scan_type || 'passive' }}",
+              "technologies": [],
+              "subdomains": [],
+              "emails": [],
+              "ip_addresses": [],
+              "open_ports": [],
+              "ssl_info": {},
+              "social_profiles": [],
+              "vulnerabilities": [],
+              "api_endpoints": [],
+              "raw_count": len(raw_results) if isinstance(raw_results, list) else 0
+          }
+          
+          # Process results by type
+          if isinstance(raw_results, list):
+              for item in raw_results:
+                  item_type = item.get('type', '')
+                  data = item.get('data', '')
+                  
+                  if 'WEBSERVER_TECHNOLOGY' in item_type:
+                      intel['technologies'].append(data)
+                  elif 'INTERNET_NAME' in item_type or 'SUBDOMAIN' in item_type:
+                      intel['subdomains'].append(data)
+                  elif 'EMAILADDR' in item_type:
+                      intel['emails'].append(data)
+                  elif 'IP_ADDRESS' in item_type:
+                      intel['ip_addresses'].append(data)
+                  elif 'TCP_PORT_OPEN' in item_type:
+                      intel['open_ports'].append(data)
+                  elif 'SSL_CERTIFICATE' in item_type:
+                      intel['ssl_info'] = data
+                  elif 'SOCIAL_MEDIA' in item_type:
+                      intel['social_profiles'].append(data)
+                  elif 'VULNERABILITY' in item_type:
+                      intel['vulnerabilities'].append(data)
+                  elif 'URL_' in item_type:
+                      intel['api_endpoints'].append(data)
+          
+          # Deduplicate lists
+          for key in ['technologies', 'subdomains', 'emails', 'ip_addresses', 'open_ports', 'social_profiles', 'api_endpoints']:
+              intel[key] = list(set(intel[key]))[:50]  # Limit to 50 items
+          
+          with open(f'processed_{competitor}.json', 'w') as f:
+              json.dump(intel, f, indent=2)
+          
+          print(f"Processed {intel['raw_count']} raw results")
+          print(f"Technologies: {len(intel['technologies'])}")
+          print(f"Subdomains: {len(intel['subdomains'])}")
+          print(f"Emails: {len(intel['emails'])}")
+          print(f"API Endpoints: {len(intel['api_endpoints'])}")
+          EOF
+
+      - name: Upload to Supabase
+        if: env.SUPABASE_URL != ''
+        run: |
+          cd /tmp
+          
+          # Upload processed results to Supabase
+          curl -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/competitor_intelligence" \
+            -H "apikey: ${{ secrets.SUPABASE_SERVICE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_KEY }}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d @processed_${{ matrix.competitor.name }}.json
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results-${{ matrix.competitor.name }}
+          path: |
+            /tmp/processed_${{ matrix.competitor.name }}.json
+            /tmp/scan_results_${{ matrix.competitor.name }}.json
+          retention-days: 30
+
+  generate-report:
+    needs: scan-competitors
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/all-scans
+
+      - name: Generate Summary Report
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          from datetime import datetime
+          
+          report = {
+              "generated_at": datetime.utcnow().isoformat(),
+              "competitors": []
+          }
+          
+          scan_dir = "/tmp/all-scans"
+          for folder in os.listdir(scan_dir):
+              folder_path = os.path.join(scan_dir, folder)
+              if os.path.isdir(folder_path):
+                  for file in os.listdir(folder_path):
+                      if file.startswith("processed_"):
+                          with open(os.path.join(folder_path, file)) as f:
+                              report["competitors"].append(json.load(f))
+          
+          # Write summary
+          with open("/tmp/weekly_ci_report.json", "w") as f:
+              json.dump(report, f, indent=2)
+          
+          # Print summary to workflow
+          print("=" * 60)
+          print("WEEKLY COMPETITIVE INTELLIGENCE SUMMARY")
+          print("=" * 60)
+          for comp in report["competitors"]:
+              print(f"\n{comp['competitor_name']} ({comp['domain']})")
+              print(f"  Technologies: {len(comp.get('technologies', []))}")
+              print(f"  Subdomains: {len(comp.get('subdomains', []))}")
+              print(f"  Emails: {len(comp.get('emails', []))}")
+              print(f"  API Endpoints: {len(comp.get('api_endpoints', []))}")
+          print("=" * 60)
+          EOF
+
+      - name: Upload Weekly Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-ci-report
+          path: /tmp/weekly_ci_report.json
+          retention-days: 90
