@@ -1,0 +1,40 @@
+# SpiderFoot CI .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# SpiderFoot data
+*.db
+*.sqlite
+spiderfoot.db
+SpiderFoot.cfg
+
+# Logs
+*.log
+logs/
+
+# Secrets (never commit)
+.env
+.env.local
+*.key
+*.pem
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Scan results (uploaded as artifacts)
+scan_results_*.json
+processed_*.json
