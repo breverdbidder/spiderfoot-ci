@@ -6,6 +6,52 @@ Zero-cost OSINT platform for automated competitor tech stack detection and hidde
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/breverdbidder/spiderfoot-ci)
 
+## ✅ Deployment Status
+
+| Component | Status |
+|-----------|--------|
+| GitHub Repository | ✅ Created |
+| GitHub Secrets | ✅ Configured |
+| Supabase Connection | ✅ REST API Working |
+| **Supabase Table** | ⚠️ **Requires 1 Manual Step** |
+| Weekly Scan Workflow | ✅ Ready |
+
+## ⚠️ ONE-TIME SETUP (Required)
+
+Run this SQL in Supabase Dashboard:
+
+1. Go to: https://supabase.com/dashboard/project/mocerqjnksmhcjzxrewo/sql
+2. Paste and run:
+
+```sql
+CREATE TABLE IF NOT EXISTS competitor_intelligence (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    competitor_name TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    category TEXT NOT NULL,
+    scan_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    scan_type TEXT NOT NULL DEFAULT 'passive',
+    technologies JSONB DEFAULT '[]'::jsonb,
+    subdomains JSONB DEFAULT '[]'::jsonb,
+    emails JSONB DEFAULT '[]'::jsonb,
+    ip_addresses JSONB DEFAULT '[]'::jsonb,
+    open_ports JSONB DEFAULT '[]'::jsonb,
+    ssl_info JSONB DEFAULT '{}'::jsonb,
+    social_profiles JSONB DEFAULT '[]'::jsonb,
+    vulnerabilities JSONB DEFAULT '[]'::jsonb,
+    api_endpoints JSONB DEFAULT '[]'::jsonb,
+    raw_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_competitor ON competitor_intelligence(competitor_name);
+CREATE INDEX IF NOT EXISTS idx_ci_domain ON competitor_intelligence(domain);
+```
+
+3. Done! Workflow will now automatically store results.
+
+---
+
 ## 💰 Cost Breakdown
 
 | Component | Cost |
@@ -34,7 +80,8 @@ Register for free tiers at:
 spiderfoot-ci/
 ├── .github/
 │   └── workflows/
-│       └── competitor-scan.yml    # Weekly automated scanning
+│       ├── competitor-scan.yml    # Weekly automated scanning
+│       └── setup-schema.yml       # One-time DB setup
 ├── supabase/
 │   └── migrations/
 │       └── 001_competitor_intelligence.sql
@@ -44,25 +91,24 @@ spiderfoot-ci/
 └── README.md
 ```
 
-## ⚙️ GitHub Secrets Required
+## ⚙️ GitHub Secrets (Already Configured)
 
-Add these to your repository secrets (`Settings > Secrets > Actions`):
+- ✅ `SUPABASE_URL`
+- ✅ `SUPABASE_SERVICE_KEY`
+- ✅ `SUPABASE_DB_PASSWORD`
 
-### Required
-- `SUPABASE_URL` - Your Supabase project URL
-- `SUPABASE_SERVICE_KEY` - Supabase service role key
+### Add Optional API Keys
+Go to: https://github.com/breverdbidder/spiderfoot-ci/settings/secrets/actions
 
-### Optional (Free Tier API Keys)
 - `SHODAN_API_KEY`
-- `CENSYS_API_ID`
-- `CENSYS_API_SECRET`
+- `CENSYS_API_ID` / `CENSYS_API_SECRET`
 - `VIRUSTOTAL_API_KEY`
 - `HUNTER_API_KEY`
 - `SECURITYTRAILS_API_KEY`
 
 ## 🎯 What It Scans
 
-The automated weekly scan targets these competitors:
+Weekly automated scans target:
 
 | Competitor | Domain | Category |
 |------------|--------|----------|
@@ -85,20 +131,8 @@ The automated weekly scan targets these competitors:
 
 ### Latest Intel Per Competitor
 ```sql
-SELECT * FROM latest_competitor_intel;
-```
-
-### Technology Trends Over Time
-```sql
-SELECT * FROM competitor_tech_trends 
-WHERE competitor_name = 'GreenLite'
-ORDER BY scan_date DESC
-LIMIT 10;
-```
-
-### What Changed Since Last Scan
-```sql
-SELECT * FROM get_competitor_changes('GreenLite');
+SELECT * FROM competitor_intelligence 
+ORDER BY scan_date DESC LIMIT 10;
 ```
 
 ### Find Competitors Using Specific Tech
@@ -120,14 +154,6 @@ gh workflow run competitor-scan.yml \
 
 Or via GitHub UI: `Actions > Competitor Intelligence Scan > Run workflow`
 
-## 🛡️ Scan Types
-
-| Type | Description | Duration |
-|------|-------------|----------|
-| `passive` | No direct probing, OSINT only | ~10 min |
-| `active` | Port scanning, brute force | ~30 min |
-| `full` | All 200+ modules | ~2 hours |
-
 ## 🔧 Adding New Competitors
 
 Edit `.github/workflows/competitor-scan.yml`:
@@ -139,13 +165,6 @@ matrix:
       name: NewCompetitor
       category: your-category
 ```
-
-## 📈 Integration with BidDeed.AI
-
-Results are stored in Supabase and can be queried by:
-- ZoneWise CI dashboard
-- BidDeed.AI analysis pipeline
-- Weekly summary reports
 
 ## 🔒 Security Notes
 
